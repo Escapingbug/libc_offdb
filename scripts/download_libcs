@@ -1,0 +1,177 @@
+#!/bin/python2
+import os.path
+import subprocess
+from pwn import *
+import libc_offdb.libc
+
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
+
+def print_hint():
+    print 'This will download the libc files to ~/.libc_offdb'
+    confirm = raw_input('Are we clear? [y/n]').strip()
+    if confirm == 'y' or confirm == 'Y':
+        return True
+    else:
+        return False
+
+
+def run_shell_cmd(cmd, fail_msg=None):
+    p = subprocess.Popen(
+        cmd,
+        shell=True,
+        stdout=subprocess.PIPE
+    )
+    if p.wait() and fail_msg is not None:
+        raise Exception(fail_msg)
+    return str.strip(p.stdout.read())
+
+
+###########################################################
+#                    process libc                         #
+###########################################################
+def process_libc(libc, identifier, info, directory):
+    print ' -> Writing libc to ' + directory + '/' + identifier + '.so'
+    run_shell_cmd(
+        'cp {libc} {dir}.so'.format(libc=libc, dir=directory + '/' + identifier)
+    )
+    print ' -> Writing version info'
+###########################################################
+#                   downloading process                   #
+###########################################################
+def is_exists(identifier, directory):
+    return os.path.exists(os.path.join(directory, identifier) + '.so')
+
+
+def _get_package_url(version, arch, pkg):
+    info = 'ubuntu-' + version + '-' + arch
+    print 'Getting package location for ' + info
+    info += '-' + pkg
+    pkg_version_url = \
+        'http://packages.ubuntu.com/{}/{}/{}/download'.format(version, arch, pkg)
+    get_pkg_version_commandline = \
+            ('(wget {0} -O ' \
+          + '- 2>/dev/null | grep -oh \'http://[^"]*libc6[^"]*.deb\')') \
+          .format(pkg_version_url)
+    url = run_shell_cmd(
+        get_pkg_version_commandline,
+        'get package version info failed!'
+    ).split('\n')[0]
+
+    print 'url is ' + url
+    return url, info
+
+def _download_libc(url, info, directory):
+    tmp = run_shell_cmd(
+        'mktemp -d || mktemp -d -t "libc_database"',
+        'get temp dir failed'
+    )
+
+    # confirm id
+    print 'Getting ' + info
+    print '  -> Location: ' + url
+    identifier = run_shell_cmd(
+        "echo {} | perl -n -e '/(libc6[^\/]*)\./ && print $1'".format(url)
+    )
+
+
+    # check id exists
+    print '  -> ID: ' + identifier
+    if is_exists(identifier, directory):
+        print 'This package already exists, remove it to re-download'
+        return
+    
+    # download
+    print 'Downloading package'
+    run_shell_cmd(
+        'wget ' + url + ' 2>/dev/null -O ' + tmp + '/pkg.deb',
+        'Failed to download package from ' + url
+    )
+
+    # extract
+    print 'tmp ' + tmp
+    print 'Extracting package'
+    run_shell_cmd(
+        'pushd ' + tmp + ' 1>/dev/null && '
+      + 'ar x pkg.deb &&'
+      + 'tar xf data.tar.* &&'
+      + 'popd 1>/dev/null',
+      'extraction failed!'
+    )
+
+    # finally locate and process
+    libc = run_shell_cmd(
+        'find ' + tmp + ' -name libc.so.6',
+        'cannot locate libc.so.6'
+    )
+
+    process_libc(libc, identifier, info, directory)
+
+    # clean things up
+    run_shell_cmd(
+        'rm -rf ' + tmp
+    )
+
+    
+    
+
+
+# use this to get a package given a version arch and pkg
+def get_package(version, arch, pkg, directory):
+    url, info = _get_package_url(version, arch, pkg)
+    _download_libc(url, info, directory)
+
+def get_all_packages(info, url, directory):
+    packages = run_shell_cmd(
+        ('wget {}/ -O - 2/dev/null | egrep -oh \'libc6(-i386|-amd64)?_[^"]*\'' +
+        ' | grep -v "</a>"').format(url)
+    ).split('\n')
+    for x in packages:
+        _download_libc("{}/{}".format(url, x), info, directory)
+    
+
+def download_process(directory):
+    get_package('trusty', 'i386', 'libc6', directory)
+    get_package('trusty', 'amd64', 'libc6', directory)
+    get_package('trusty', 'amd64', 'libc6-i386', directory)
+    get_package('xenial', 'i386', 'libc6', directory)
+    get_package('xenial', 'amd64', 'libc6', directory)
+    get_package('xenial', 'amd64', 'libc6-i386', directory)
+    get_package('yakkety', 'i386', 'libc6', directory)
+    get_package('yakkety', 'amd64', 'libc6', directory)
+    get_package('yakkety', 'amd64', 'libc6-i386', directory)
+
+    DOMAIN_URL = 'http://security.ubuntu.com/ubuntu/pool/main/'
+    
+    get_all_packages('archive-eglibc', DOMAIN_URL + 'e/eglibc', directory)
+    get_all_packages('archive-glibc', DOMAIN_URL + 'g/glibc', directory)
+#######################################################
+def save_symbols():
+    print 'processing symbols, please wait'
+    directory = os.path.expanduser('~/.libc_offdb')
+    with libc_offdb.libc.hide_log() as hidden:
+        for root, dirs, files in os.walk(directory):
+            for f in files:
+                if f.endswith('.dump'):
+                    continue
+                info_filename = os.path.join(directory, f) + '.dump'
+                with open(info_filename, 'wb') as fp:
+                    elf = ELF(os.path.join(directory, f))
+                    pickle.dump(dict(elf.symbols), fp)
+    print 'success!'
+
+
+def main():
+    if not print_hint():
+        return
+    directory = os.path.expanduser('~')
+    directory += '/.libc_offdb/'
+    if not os.path.exists(directory):
+        os.mkdir(directory)
+    download_process(directory)
+    save_symbols()
+
+if __name__ == "__main__":
+    main()
