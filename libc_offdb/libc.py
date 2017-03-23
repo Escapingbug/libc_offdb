@@ -34,7 +34,7 @@ def find_libc(address, symbol, libc_name=None):
                             if hex(found).endswith(address):
                                 print 'found:'
                                 print 'name: ' + f[:-5]
-                            ret.append(dic)
+                                ret.append(dic)
                         except KeyError:
                             continue
         else:
