@@ -1,5 +1,5 @@
 # libc-offdb
-A simple tools to extract symbols from libcs
+A simple tool to extract symbols from libcs
 
 # simple install
     git clone https://github.com/Escapingbug/libc_offdb
